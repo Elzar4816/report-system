@@ -4,8 +4,11 @@ import jakarta.persistence.*;
 import lombok.Data;
 
 @Entity
+@Table(name="users", uniqueConstraints={
+        @UniqueConstraint(columnNames={"username"}),
+        @UniqueConstraint(columnNames={"email"})
+})
 @Data
-@Table(name = "users")
 public class User {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
