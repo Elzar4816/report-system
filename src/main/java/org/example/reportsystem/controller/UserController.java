@@ -1,8 +1,10 @@
 package org.example.reportsystem.controller;
 
 import lombok.RequiredArgsConstructor;
+import org.example.reportsystem.dto.UserDto;
 import org.example.reportsystem.model.User;
 import org.example.reportsystem.repository.UserRepository;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,9 +18,13 @@ public class UserController {
     private final UserRepository userRepository;
 
     @GetMapping
-    public List<User> getAll() {
-        return userRepository.findAll();
+    public List<UserDto> getAll() {
+        return userRepository.findAll(Sort.by("id"))
+                .stream()
+                .map(UserDto::from)
+                .toList();
     }
+
 
     @GetMapping("/{id}")
     public ResponseEntity<User> getById(@PathVariable Long id) {
