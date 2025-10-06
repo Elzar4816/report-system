@@ -30,24 +30,32 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         String token = null;
 
-        // 1) Authorization: Bearer ...
         String h = req.getHeader(HttpHeaders.AUTHORIZATION);
         if (h != null && h.startsWith("Bearer ")) token = h.substring(7);
 
-        // 2) Cookie: access=...
         if (token == null && req.getCookies() != null) {
             for (var c : req.getCookies()) {
                 if ("access".equals(c.getName())) { token = c.getValue(); break; }
             }
         }
 
-        if (token != null) {
+        if (token != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
-                var sub = jwt.claims(token).getSubject();
-                var user = uds.loadUserByUsername(sub);
-                var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+                // username + authorities из токена
+                var username = jwt.extractUsername(token);
+                var authorities = jwt.extractRoles(token).stream()
+                        .map(r -> "ROLE_" + r.toUpperCase())
+                        .map(org.springframework.security.core.authority.SimpleGrantedAuthority::new)
+                        .toList();
+
+                //  флаги (enabled, locked), можешь слить с UserDetails:
+                // var ud = uds.loadUserByUsername(username);
+                // var merged = Stream.concat(ud.getAuthorities().stream(), authorities.stream()).distinct().toList();
+                // var auth = new UsernamePasswordAuthenticationToken(ud, null, merged);
+
+                var auth = new UsernamePasswordAuthenticationToken(username, null, authorities);
                 SecurityContextHolder.getContext().setAuthentication(auth);
-            } catch (JwtException ignored) {
+            } catch (io.jsonwebtoken.JwtException ignored) {
                 SecurityContextHolder.clearContext();
             }
         }
@@ -55,4 +63,3 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         chain.doFilter(req, res);
     }
 }
-

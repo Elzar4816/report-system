@@ -12,6 +12,7 @@ import org.springframework.security.authentication.dao.DaoAuthenticationProvider
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -24,10 +25,9 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-// свои классы
-import org.example.reportsystem.security.JwtAuthFilter;
 import org.example.reportsystem.service.AppUserDetailsService;
 
+import java.util.Arrays;
 import java.util.List;
 
 @Configuration
@@ -39,39 +39,39 @@ public class SecurityConfig {
     @Bean PasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(); }
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http,
-                                            JwtAuthFilter jwtFilter) throws Exception {
-        http
-                .csrf(csrf -> csrf.disable())
+    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        return http
+                .csrf(AbstractHttpConfigurer::disable)
+                .cors(c -> {})
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/auth/**").permitAll() // login/refresh/logout
-                        // ↓ Если есть эндпоинты, которые ДОЛЖНЫ требовать логин:
-                        .requestMatchers("/api/admin/**").authenticated()
-                        // ↓ Важно: всё остальное — доступно и гостю
-                        .anyRequest().permitAll()
+                        // public endpoints
+                        .requestMatchers("/auth/login", "/auth/register", "/auth/refresh", "/auth/logout").permitAll()
+                        // profile for authenticated
+                        .requestMatchers("/auth/profile").authenticated()
+                        // admin endpoints
+                        .requestMatchers("/api/users/**").hasRole("ADMIN")
+                        .anyRequest().authenticated()
                 )
-                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
-        return http.build();
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
+                .build();
     }
-    // любая @Configuration
+
     @Bean
     public org.springframework.web.filter.CommonsRequestLoggingFilter requestLoggingFilter() {
         var f = new org.springframework.web.filter.CommonsRequestLoggingFilter();
-        f.setIncludeClientInfo(true);     // ip, session, user
-        f.setIncludeQueryString(true);    // ?a=1&b=2
-        f.setIncludePayload(true);        // тело (осторожно с паролями)
+        f.setIncludeClientInfo(true);
+        f.setIncludeQueryString(true);
+        f.setIncludePayload(true);
         f.setMaxPayloadLength(4096);
-        f.setIncludeHeaders(false);       // можно true, если нужно
+        f.setIncludeHeaders(false);
         return f;
     }
 
-
-
-    @Bean
     CorsConfigurationSource cors(@Value("${app.cors.allowed-origins}") String origins) {
         var cfg = new CorsConfiguration();
-        cfg.setAllowedOrigins(List.of(origins.split(",")));
+        var list = Arrays.stream(origins.split(",")).map(String::trim).toList();
+        cfg.setAllowedOrigins(list);                 // или cfg.setAllowedOriginPatterns(list);
         cfg.setAllowedMethods(List.of("GET","POST","PUT","PATCH","DELETE","OPTIONS"));
         cfg.setAllowedHeaders(List.of("*"));
         cfg.setAllowCredentials(true);

@@ -33,12 +33,13 @@ public class ProjectController {
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<Project> update(@PathVariable Long id, @RequestBody Project updatedProject) {
+    public ResponseEntity<Project> update(@PathVariable Long id, @RequestBody Project updated) {
         return projectRepository.findById(id)
-                .map(project -> {
-                    project.setName(updatedProject.getName());
-                    project.setDescription(updatedProject.getDescription());
-                    return ResponseEntity.ok(projectRepository.save(project));
+                .map(p -> {
+                    p.setName(updated.getName());
+                    p.setDescription(updated.getDescription());
+                    p.setDeadline(updated.getDeadline()); // важное добавление
+                    return ResponseEntity.ok(projectRepository.save(p));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }

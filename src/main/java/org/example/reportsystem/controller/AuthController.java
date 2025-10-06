@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.example.reportsystem.dto.ProfileDto;
 import org.example.reportsystem.model.Role;
 import org.example.reportsystem.model.User;
 import org.example.reportsystem.repository.TokenRepository;
@@ -20,14 +21,14 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.security.core.GrantedAuthority;
+
 import org.springframework.security.core.userdetails.UserDetails;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.NoSuchElementException;
-import java.util.Set;
+
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+
 
 @RestController
 @RequestMapping("/auth")
@@ -38,9 +39,8 @@ public class AuthController {
     private final UserRepository users;
     private final TokenRepository tokenRepo;
     private final PasswordEncoder enc;
-    private final Set<String> revoked = ConcurrentHashMap.newKeySet();
     private final AuthService authService;
-    // DEV-профиль: для http локально
+
     private static final boolean COOKIE_SECURE = false;     // prod: true
     private static final String COOKIE_SAMESITE = "Lax";    // prod: "Strict"
 
@@ -50,7 +50,7 @@ public class AuthController {
     private ResponseCookie accessCookie(String token, Duration ttl) {
         return ResponseCookie.from("access", token)
                 .httpOnly(true).secure(COOKIE_SECURE).sameSite(COOKIE_SAMESITE)
-                .path("/")                      // доступна везде
+                .path("/")
                 .maxAge(ttl)
                 .build();
     }
@@ -58,7 +58,7 @@ public class AuthController {
     private ResponseCookie refreshCookie(String token, Duration ttl) {
         return ResponseCookie.from("refresh", token)
                 .httpOnly(true).secure(COOKIE_SECURE).sameSite(COOKIE_SAMESITE)
-                .path("/auth")                  // только для /auth/*
+                .path("/auth")
                 .maxAge(ttl)
                 .build();
     }
@@ -90,26 +90,18 @@ public class AuthController {
                 new UsernamePasswordAuthenticationToken(dto.username(), dto.password())
         );
 
-        // principal = стандартный UserDetails
+
         var principal = (UserDetails) auth.getPrincipal();
 
-        // тянем твою доменную сущность (для id/role и записи токена)
         var user = users.findByUsername(principal.getUsername()).orElseThrow();
 
-        // роли для JWT: либо из authorities, либо из твоей enum Role
-        var roles = principal.getAuthorities().stream()
-                .map(GrantedAuthority::getAuthority)
-                .toList();
-        // если authorities пустые, можно так:
-        // var roles = java.util.List.of("ROLE_" + user.getRole().name());
+        var roles = java.util.List.of(user.getRole().name().toLowerCase());
 
         var refreshJti = UUID.randomUUID().toString();
 
-        // ВАЖНО: genAccess принимает ТОЛЬКО (sub, roles)
         var access  = jwt.genAccess(user.getUsername(), roles);
         var refresh = jwt.genRefresh(user.getUsername(), refreshJti);
 
-        // сохраняем в БД только refresh
         tokenRepo.save(Token.builder()
                 .id(refreshJti)
                 .user(user)
@@ -163,4 +155,16 @@ public class AuthController {
         res.addHeader(HttpHeaders.SET_COOKIE, clearCookie("refresh").toString());
         return ResponseEntity.noContent().build();
     }
+
+    @GetMapping("/profile")
+    public ProfileDto profile(org.springframework.security.core.Authentication auth) {
+        var u = users.findByUsername(auth.getName()).orElseThrow();
+        var roles = auth.getAuthorities().stream()
+                .map(org.springframework.security.core.GrantedAuthority::getAuthority) // ROLE_ADMIN
+                .map(a -> a.startsWith("ROLE_") ? a.substring(5) : a)                  // ADMIN
+                .map(String::toLowerCase)                                              // admin
+                .toList();
+        return new ProfileDto(u.getId(), u.getUsername(), u.getEmail(), roles);
+    }
+
 }
