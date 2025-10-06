@@ -38,7 +38,8 @@ public class ProjectController {
                 .map(p -> {
                     p.setName(updated.getName());
                     p.setDescription(updated.getDescription());
-                    p.setDeadline(updated.getDeadline()); // важное добавление
+                    p.setDeadline(updated.getDeadline());
+                    p.setCost(updated.getCost());
                     return ResponseEntity.ok(projectRepository.save(p));
                 })
                 .orElse(ResponseEntity.notFound().build());
