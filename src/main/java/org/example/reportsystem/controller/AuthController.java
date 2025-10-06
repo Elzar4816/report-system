@@ -1,13 +1,18 @@
 package org.example.reportsystem.controller;
 
 import io.jsonwebtoken.JwtException;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.example.reportsystem.model.Role;
 import org.example.reportsystem.model.User;
+import org.example.reportsystem.repository.TokenRepository;
 import org.example.reportsystem.repository.UserRepository;
 import org.example.reportsystem.security.JwtService;
+import org.example.reportsystem.model.Token;
+import org.example.reportsystem.model.TokenType;
+import org.example.reportsystem.service.AuthService;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
@@ -15,9 +20,11 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
-
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
 import java.time.Duration;
-import java.util.List;
+import java.time.Instant;
+import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,9 +36,10 @@ public class AuthController {
     private final AuthenticationManager authManager;
     private final JwtService jwt;
     private final UserRepository users;
+    private final TokenRepository tokenRepo;
     private final PasswordEncoder enc;
     private final Set<String> revoked = ConcurrentHashMap.newKeySet();
-
+    private final AuthService authService;
     // DEV-профиль: для http локально
     private static final boolean COOKIE_SECURE = false;     // prod: true
     private static final String COOKIE_SAMESITE = "Lax";    // prod: "Strict"
@@ -75,31 +83,74 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public ResponseEntity<Void> login(@RequestBody @Valid LoginReq r, HttpServletResponse res) {
-        authManager.authenticate(new UsernamePasswordAuthenticationToken(r.username(), r.password()));
-        var u = users.findByUsername(r.username()).orElseThrow();
-        var roles = List.of(u.getRole().name());
+    public ResponseEntity<?> login(@Valid @RequestBody LoginReq dto,
+                                   HttpServletRequest req,
+                                   HttpServletResponse res) {
+        var auth = authManager.authenticate(
+                new UsernamePasswordAuthenticationToken(dto.username(), dto.password())
+        );
 
-        var access  = jwt.genAccess(u.getUsername(), roles);
-        var refresh = jwt.genRefresh(u.getUsername(), UUID.randomUUID().toString());
+        // principal = стандартный UserDetails
+        var principal = (UserDetails) auth.getPrincipal();
 
-        res.addHeader(HttpHeaders.SET_COOKIE, accessCookie(access, Duration.ofMinutes(15)).toString());
-        res.addHeader(HttpHeaders.SET_COOKIE, refreshCookie(refresh, Duration.ofDays(14)).toString());
-        return ResponseEntity.noContent().build();
+        // тянем твою доменную сущность (для id/role и записи токена)
+        var user = users.findByUsername(principal.getUsername()).orElseThrow();
+
+        // роли для JWT: либо из authorities, либо из твоей enum Role
+        var roles = principal.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .toList();
+        // если authorities пустые, можно так:
+        // var roles = java.util.List.of("ROLE_" + user.getRole().name());
+
+        var refreshJti = UUID.randomUUID().toString();
+
+        // ВАЖНО: genAccess принимает ТОЛЬКО (sub, roles)
+        var access  = jwt.genAccess(user.getUsername(), roles);
+        var refresh = jwt.genRefresh(user.getUsername(), refreshJti);
+
+        // сохраняем в БД только refresh
+        tokenRepo.save(Token.builder()
+                .id(refreshJti)
+                .user(user)
+                .type(TokenType.REFRESH)
+                .expiresAt(jwt.expiresAt(refresh))
+                .revoked(false)
+                .userAgent(req.getHeader("User-Agent"))
+                .ip(req.getRemoteAddr())
+                .createdAt(Instant.now())
+                .build());
+
+        var now = Instant.now();
+        var accessTtl  = Duration.between(now, jwt.expiresAt(access));
+        var refreshTtl = Duration.between(now, jwt.expiresAt(refresh));
+
+        res.addHeader(HttpHeaders.SET_COOKIE, accessCookie(access, accessTtl).toString());
+        res.addHeader(HttpHeaders.SET_COOKIE, refreshCookie(refresh, refreshTtl).toString());
+
+        return ResponseEntity.ok().build();
     }
 
     @PostMapping("/refresh")
-    public ResponseEntity<Void> refresh(@CookieValue("refresh") String refresh, HttpServletResponse res) {
+    public ResponseEntity<Void> refresh(@CookieValue(name="refresh", required=false) String refreshCookie,
+                                        HttpServletRequest req,
+                                        HttpServletResponse res) {
+        if (refreshCookie == null) return ResponseEntity.status(401).build();
         try {
-            var c = jwt.claims(refresh);
-            if (revoked.contains(c.getId())) return ResponseEntity.status(401).build();
+            var r = authService.rotateRefresh(
+                    refreshCookie,
+                    req.getHeader("User-Agent"),
+                    req.getRemoteAddr()
+            );
 
-            var u = users.findByUsername(c.getSubject()).orElseThrow();
-            var access = jwt.genAccess(u.getUsername(), List.of(u.getRole().name()));
+            var now = Instant.now();
+            var accessTtl  = Duration.between(now, r.accessExp());
+            var refreshTtl = Duration.between(now, r.refreshExp());
 
-            res.addHeader(HttpHeaders.SET_COOKIE, accessCookie(access, Duration.ofMinutes(15)).toString());
+            res.addHeader(HttpHeaders.SET_COOKIE, accessCookie(r.access(), accessTtl).toString());
+            res.addHeader(HttpHeaders.SET_COOKIE, refreshCookie(r.refresh(), refreshTtl).toString());
             return ResponseEntity.noContent().build();
-        } catch (JwtException e) {
+        } catch (NoSuchElementException e) {
             return ResponseEntity.status(401).build();
         }
     }
@@ -107,9 +158,7 @@ public class AuthController {
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(@CookieValue(name="refresh", required=false) String refresh,
                                        HttpServletResponse res) {
-        if (refresh != null) {
-            try { revoked.add(jwt.claims(refresh).getId()); } catch (JwtException ignored) {}
-        }
+        if (refresh != null) authService.revokeRefresh(refresh);
         res.addHeader(HttpHeaders.SET_COOKIE, clearCookie("access").toString());
         res.addHeader(HttpHeaders.SET_COOKIE, clearCookie("refresh").toString());
         return ResponseEntity.noContent().build();

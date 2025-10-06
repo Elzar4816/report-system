@@ -17,8 +17,6 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 
-// свои классы
-import org.example.reportsystem.security.JwtService;
 import org.example.reportsystem.service.AppUserDetailsService;
 @Component
 @RequiredArgsConstructor

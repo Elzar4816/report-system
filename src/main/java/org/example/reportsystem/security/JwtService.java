@@ -14,8 +14,6 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.Date;
 
-import org.springframework.stereotype.Component;
-
 @Component
 public class JwtService {
     @Value("${jwt.secret}") private String secret;
@@ -45,6 +43,9 @@ public class JwtService {
     public Claims claims(String token) {
         return Jwts.parser().verifyWith(key()).build()
                 .parseSignedClaims(token).getPayload();
+    }
+    public Instant expiresAt(String token) {
+        return claims(token).getExpiration().toInstant();
     }
 }
 

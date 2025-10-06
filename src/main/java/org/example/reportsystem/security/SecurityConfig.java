@@ -39,16 +39,34 @@ public class SecurityConfig {
     @Bean PasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(); }
 
     @Bean
-    SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http.csrf(csrf -> csrf.disable())
+    SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                            JwtAuthFilter jwtFilter) throws Exception {
+        http
+                .csrf(csrf -> csrf.disable())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(reg -> reg
-                        .requestMatchers("/auth/**", "/public/**").permitAll()
-                        .anyRequest().authenticated())
-                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
-                .cors(c -> {});
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/auth/**").permitAll() // login/refresh/logout
+                        // ↓ Если есть эндпоинты, которые ДОЛЖНЫ требовать логин:
+                        .requestMatchers("/api/admin/**").authenticated()
+                        // ↓ Важно: всё остальное — доступно и гостю
+                        .anyRequest().permitAll()
+                )
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
+    // любая @Configuration
+    @Bean
+    public org.springframework.web.filter.CommonsRequestLoggingFilter requestLoggingFilter() {
+        var f = new org.springframework.web.filter.CommonsRequestLoggingFilter();
+        f.setIncludeClientInfo(true);     // ip, session, user
+        f.setIncludeQueryString(true);    // ?a=1&b=2
+        f.setIncludePayload(true);        // тело (осторожно с паролями)
+        f.setMaxPayloadLength(4096);
+        f.setIncludeHeaders(false);       // можно true, если нужно
+        return f;
+    }
+
+
 
     @Bean
     CorsConfigurationSource cors(@Value("${app.cors.allowed-origins}") String origins) {
